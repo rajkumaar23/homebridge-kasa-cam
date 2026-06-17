@@ -5,6 +5,9 @@
   "main": "index.js",
   "author": "rajkumaar23",
   "license": "MIT",
+  "scripts": {
+    "test": "node --check index.js && node --check lib/tplink.js && node --check lib/streaming.js && node --check lib/recording.js"
+  },
   "engines": {
     "homebridge": ">=1.6.0",
     "node": ">=18"
