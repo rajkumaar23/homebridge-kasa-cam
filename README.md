@@ -52,7 +52,9 @@ Kasa cameras have no RTSP/ONVIF and use a proprietary stream, so point this plug
 Requirements / notes:
 - **ffmpeg** must be installed on the Homebridge host (set `ffmpegPath` if it's not on `PATH`).
 - **`source`** / **`stillImageSource`** are ffmpeg input arg strings; `stillImageSource` defaults to `source` if omitted.
-- **Native privacy via HKSV:** with video, the camera is exposed as a **HomeKit Secure Video** camera, so the device on/off maps to the camera tile's native **"Camera Off"** (no separate switch). HKSV recording itself needs an iCloud+ plan + a home hub; the on/off control works regardless. Set **`privacyAsSwitch: true`** to disable HKSV and use a standalone on/off switch instead.
+- **Native privacy via HKSV:** with video, the camera is exposed as a **HomeKit Secure Video** camera, so the device on/off lives in the camera's native mode control (Settings → set *When Home*/*When Away* to **Off**). HKSV recording needs an iCloud+ plan + a home hub; the on/off works regardless.
+  - **`privacySwitch: true`** — also add a standalone on/off **switch** alongside the native mode (both stay in sync) if you want a one-tap toggle.
+  - **`privacyAsSwitch: true`** — disable HKSV entirely and use only the standalone switch.
 - HKSV is **experimental** here (hard to validate without an iOS device/hub); if the camera misbehaves, `privacyAsSwitch: true` falls back to the simple streaming camera + switch.
 - **Video only** for now — HomeKit audio needs AAC-ELD (`libfdk_aac`), which most ffmpeg builds lack.
 - Set `copyVideo: true` to pass H.264 through without re-encoding (much lower CPU); turn it off if the picture is glitchy.

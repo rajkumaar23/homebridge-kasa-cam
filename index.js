@@ -33,6 +33,7 @@ class KasaCamPlatform {
     this.accessories = [];           // cached accessories from disk
     this.managed = [];               // [{ accessory, cam, feature }]
     this.stateCache = new Map();     // `${deviceId}:${feature}` -> bool
+    this.privacyUpdaters = new Map();// deviceId -> [(on)=>void] : keep switch + camera mode in sync
 
     if (!this.config.email || !this.config.password) {
       this.log.error('Config requires "email" and "password" (your TP-Link account).');
@@ -60,6 +61,22 @@ class KasaCamPlatform {
 
   featuresFor() { return Object.keys(FEATURES).filter((k) => this.enabled[k]); }
 
+  // Privacy (camera on/off) can be controlled from multiple places (the on/off switch and the
+  // HKSV camera mode). Register each control's characteristic updater, and push a change to all
+  // of them so they stay in sync immediately rather than only on the next poll.
+  registerPrivacy(deviceId, updater) {
+    if (!this.privacyUpdaters.has(deviceId)) this.privacyUpdaters.set(deviceId, []);
+    this.privacyUpdaters.get(deviceId).push(updater);
+  }
+  applyPrivacy(deviceId, on) {
+    this.stateCache.set(`${deviceId}:power`, on);
+    for (const u of this.privacyUpdaters.get(deviceId) || []) { try { u(on); } catch (e) { /* */ } }
+  }
+  async setPrivacy(deviceId, on) {
+    await this.cloud.setCameraEnabled(deviceId, on);
+    this.applyPrivacy(deviceId, on);
+  }
+
   async setup() {
     const cams = this.config.cameras || [];
     if (!cams.length) this.log.warn('No cameras configured. Add cameras with at least an "ip".');
@@ -69,9 +86,11 @@ class KasaCamPlatform {
     for (const cam of cams) {
       try { await this.resolveCamera(cam); }
       catch (e) { this.log.error(`Skipping camera ${cam.name || cam.ip || cam.deviceId}: ${e.message}`); continue; }
-      const nativePrivacy = cam.source && !this.config.privacyAsSwitch; // HKSV operating-mode handles on/off
+      // Standalone on/off switch: always for non-video cameras; for video cameras only if HKSV
+      // is disabled (privacyAsSwitch) or explicitly added to complement the native mode (privacySwitch).
+      const wantSwitch = !cam.source || this.config.privacyAsSwitch || this.config.privacySwitch;
       for (const feature of this.featuresFor()) {
-        if (feature === 'power' && nativePrivacy) continue;
+        if (feature === 'power' && !wantSwitch) continue;
         const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:${feature}`);
         desired.set(uuid, { cam, feature });
       }
@@ -138,14 +157,19 @@ class KasaCamPlatform {
       .onGet(() => this.stateCache.get(`${cam.deviceId}:${feature}`) ?? true)
       .onSet(async (value) => {
         try {
-          await this.cloud.setFeature(cam.deviceId, spec.ns, spec.set, !!value);
-          this.stateCache.set(`${cam.deviceId}:${feature}`, !!value);
+          if (feature === 'power') {
+            await this.setPrivacy(cam.deviceId, !!value); // syncs the camera mode too
+          } else {
+            await this.cloud.setFeature(cam.deviceId, spec.ns, spec.set, !!value);
+            this.stateCache.set(`${cam.deviceId}:${feature}`, !!value);
+          }
           this.log.info(`${name}: ${value ? 'ON' : 'OFF'}`);
         } catch (e) {
           this.log.error(`${name}: set failed: ${e.message}`);
           throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
         }
       });
+    if (feature === 'power') this.registerPrivacy(cam.deviceId, (on) => svc.updateCharacteristic(Characteristic.On, on));
 
     this.managed.push({ accessory, cam, feature, svc });
   }
@@ -219,16 +243,15 @@ class KasaCamPlatform {
       om.getCharacteristic(Characteristic.HomeKitCameraActive)
         .onGet(() => ((this.stateCache.get(`${cam.deviceId}:power`) ?? true) ? 1 : 0))
         .onSet(async (value) => {
-          const on = value === 1;
           try {
-            await this.cloud.setCameraEnabled(cam.deviceId, on);
-            this.stateCache.set(`${cam.deviceId}:power`, on);
-            this.log.info(`${name}: camera ${on ? 'ON' : 'OFF (privacy)'}`);
+            await this.setPrivacy(cam.deviceId, value === 1); // syncs the switch too
+            this.log.info(`${name}: camera ${value === 1 ? 'ON' : 'OFF (privacy)'}`);
           } catch (e) {
             this.log.error(`${name}: privacy set failed: ${e.message}`);
             throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
           }
         });
+      this.registerPrivacy(cam.deviceId, (on) => om.updateCharacteristic(Characteristic.HomeKitCameraActive, on ? 1 : 0));
     }
     this.managed.push({ accessory, cam, feature: 'camera', om });
   }
@@ -239,14 +262,15 @@ class KasaCamPlatform {
       if (!sysCache.has(ip)) { try { sysCache.set(ip, await getLocalSysinfo(ip)); } catch (e) { sysCache.set(ip, null); } }
       return sysCache.get(ip);
     };
-    for (const { cam, feature, svc, om } of this.managed) {
+    const privacyDone = new Set(); // poll camera on/off once per device, sync all its controls
+    for (const { cam, feature, svc } of this.managed) {
       try {
-        if (feature === 'camera') {
-          if (!om) continue; // privacyAsSwitch mode: handled by the power switch
+        if (feature === 'power' || feature === 'camera') {
+          if (privacyDone.has(cam.deviceId)) continue;
+          privacyDone.add(cam.deviceId);
           const sys = cam.ip ? await getSys(cam.ip) : null;
           const on = sys ? sys.camera_switch === 'on' : await this.cloud.getCameraEnabledCloud(cam.deviceId);
-          this.stateCache.set(`${cam.deviceId}:power`, on);
-          om.updateCharacteristic(Characteristic.HomeKitCameraActive, on ? 1 : 0);
+          this.applyPrivacy(cam.deviceId, on); // updates the switch + camera mode + cache
           continue;
         }
         const spec = FEATURES[feature];
