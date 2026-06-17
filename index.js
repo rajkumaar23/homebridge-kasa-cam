@@ -76,7 +76,10 @@ class KasaCamPlatform {
         desired.set(uuid, { cam, feature });
       }
       if (cam.source) {
-        const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:camera`);
+        // ':cam2' (not ':camera') so the accessory cached by <=0.4.0 — which has a
+        // manually-added CameraOperatingMode service that collides with the HKSV
+        // controller's own — is discarded as stale and rebuilt fresh.
+        const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:cam2`);
         desired.set(uuid, { cam, feature: 'camera' });
       }
     }
