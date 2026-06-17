@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { TapoCloud, getLocalSysinfo } = require('./lib/tplink');
 const { StreamingDelegate } = require('./lib/streaming');
+const { RecordingDelegate } = require('./lib/recording');
 
 const PLUGIN_NAME = 'homebridge-kasa-cam';
 const PLATFORM_NAME = 'KasaCam';
@@ -68,9 +69,9 @@ class KasaCamPlatform {
     for (const cam of cams) {
       try { await this.resolveCamera(cam); }
       catch (e) { this.log.error(`Skipping camera ${cam.name || cam.ip || cam.deviceId}: ${e.message}`); continue; }
-      const nativePrivacy = cam.source && !this.config.privacyAsSwitch;
+      const nativePrivacy = cam.source && !this.config.privacyAsSwitch; // HKSV operating-mode handles on/off
       for (const feature of this.featuresFor()) {
-        if (feature === 'power' && nativePrivacy) continue; // privacy handled by the camera tile
+        if (feature === 'power' && nativePrivacy) continue;
         const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:${feature}`);
         desired.set(uuid, { cam, feature });
       }
@@ -167,32 +168,51 @@ class KasaCamPlatform {
     const delegate = new StreamingDelegate(hap, this.log, name, cam.source, cam.stillImageSource, this.config.ffmpegPath, {
       copyVideo: !!this.config.copyVideo,
     });
-    const controller = new hap.CameraController({
+
+    const resolutions = [
+      [320, 180, 30], [320, 240, 15], [480, 270, 30], [640, 360, 30],
+      [640, 480, 30], [1280, 720, 30], [1280, 960, 30], [1920, 1080, 30],
+    ];
+    const h264 = {
+      profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
+      levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0],
+    };
+
+    // HKSV (recording) is what makes HomeKit expose the native operating-mode controls
+    // (incl. the on/off "Camera Off"). Enabled unless privacyAsSwitch is set.
+    const hksv = !this.config.privacyAsSwitch;
+    let recordingDelegate = null;
+    const options = {
       cameraStreamCount: 2,
       delegate,
       streamingOptions: {
         supportedCryptoSuites: [hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
-        video: {
-          resolutions: [
-            [1920, 1080, 30], [1280, 720, 30], [1024, 768, 30],
-            [640, 360, 30], [480, 270, 30], [320, 240, 30], [320, 180, 30],
-          ],
-          codec: {
-            profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
-            levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0],
-          },
-        },
+        video: { resolutions, codec: h264 },
         audio: { codecs: [{ type: hap.AudioStreamingCodecType.AAC_ELD, samplerate: hap.AudioStreamingSamplerate.KHZ_16 }] },
       },
-    });
+    };
+    if (hksv) {
+      recordingDelegate = new RecordingDelegate(hap, this.log, name, cam.source, this.config.ffmpegPath);
+      options.recording = {
+        delegate: recordingDelegate,
+        options: {
+          prebufferLength: 4000,
+          mediaContainerConfiguration: [{ type: hap.MediaContainerType.FRAGMENTED_MP4, fragmentLength: 4000 }],
+          video: { type: hap.VideoCodecType.H264, parameters: h264, resolutions },
+          audio: { codecs: [{ type: hap.AudioRecordingCodecType.AAC_LC, samplerate: hap.AudioRecordingSamplerate.KHZ_32, audioChannels: 1, bitrateMode: 0 }] },
+        },
+      };
+      options.sensors = { motion: true }; // HKSV needs a motion (or occupancy) sensor
+    }
+
+    const controller = new hap.CameraController(options);
     delegate.controller = controller;
     accessory.configureController(controller);
 
-    // Native privacy: map the device on/off to the camera tile's HomeKitCameraActive
-    // (and reflect it in ManuallyDisabled). Skipped if privacyAsSwitch is set.
+    // Wire the native Camera Off (operating mode) to the device's cloud privacy.
     let om = null;
-    if (!this.config.privacyAsSwitch) {
-      om = accessory.getService(Service.CameraOperatingMode) || accessory.addService(Service.CameraOperatingMode);
+    if (hksv && controller.recordingManagement) {
+      om = controller.recordingManagement.operatingModeService;
       om.getCharacteristic(Characteristic.HomeKitCameraActive)
         .onGet(() => ((this.stateCache.get(`${cam.deviceId}:power`) ?? true) ? 1 : 0))
         .onSet(async (value) => {
@@ -200,10 +220,9 @@ class KasaCamPlatform {
           try {
             await this.cloud.setCameraEnabled(cam.deviceId, on);
             this.stateCache.set(`${cam.deviceId}:power`, on);
-            if (Characteristic.ManuallyDisabled) om.updateCharacteristic(Characteristic.ManuallyDisabled, on ? 0 : 1);
-            this.log.info(`${cam.name}: camera ${on ? 'ON' : 'OFF (privacy)'}`);
+            this.log.info(`${name}: camera ${on ? 'ON' : 'OFF (privacy)'}`);
           } catch (e) {
-            this.log.error(`${cam.name}: privacy set failed: ${e.message}`);
+            this.log.error(`${name}: privacy set failed: ${e.message}`);
             throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
           }
         });
@@ -220,12 +239,11 @@ class KasaCamPlatform {
     for (const { cam, feature, svc, om } of this.managed) {
       try {
         if (feature === 'camera') {
-          if (!om) continue; // privacyAsSwitch mode: handled by the power switch instead
+          if (!om) continue; // privacyAsSwitch mode: handled by the power switch
           const sys = cam.ip ? await getSys(cam.ip) : null;
           const on = sys ? sys.camera_switch === 'on' : await this.cloud.getCameraEnabledCloud(cam.deviceId);
           this.stateCache.set(`${cam.deviceId}:power`, on);
           om.updateCharacteristic(Characteristic.HomeKitCameraActive, on ? 1 : 0);
-          if (Characteristic.ManuallyDisabled) om.updateCharacteristic(Characteristic.ManuallyDisabled, on ? 0 : 1);
           continue;
         }
         const spec = FEATURES[feature];

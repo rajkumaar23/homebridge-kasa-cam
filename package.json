@@ -1,6 +1,6 @@
 {
   "name": "homebridge-kasa-cam",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "HomeKit on/off (privacy) control for TP-Link Kasa cameras (EC70, KC-series, etc.). Reads state locally over UDP; writes via the reverse-engineered Tapo cloud passthrough API, since current Kasa camera firmware has no local control path.",
   "main": "index.js",
   "author": "rajkumaar23",
