@@ -22,7 +22,8 @@
           "properties": {
             "ip": { "title": "Local IP", "type": "string", "description": "Camera's LAN IP. deviceId, model and name are auto-detected from it." },
             "name": { "title": "Name (optional)", "type": "string", "description": "Overrides the camera's app alias." },
-            "streamUrl": { "title": "Stream URL (optional, enables video)", "type": "string", "description": "An ffmpeg-readable URL for the live feed, e.g. a go2rtc RTSP stream: rtsp://<go2rtc-host>:8554/living_room. When set, a HomeKit camera tile is added. Requires ffmpeg." },
+            "source": { "title": "ffmpeg source args (enables video)", "type": "string", "description": "ffmpeg input args for the live feed, e.g. '-rtsp_transport tcp -i rtsp://<go2rtc-host>:8554/living_room'. When set, a HomeKit camera tile is added. Requires ffmpeg." },
+            "stillImageSource": { "title": "ffmpeg still-image args (optional)", "type": "string", "description": "ffmpeg input args for snapshots, e.g. '-i http://<go2rtc-host>:1984/api/frame.jpeg?src=living_room'. Defaults to the source." },
             "deviceId": { "title": "Device ID (optional)", "type": "string", "description": "Only needed if the camera isn't reachable on the local network." }
           }
         }

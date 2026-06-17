@@ -72,7 +72,7 @@ class KasaCamPlatform {
         const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:${feature}`);
         desired.set(uuid, { cam, feature });
       }
-      if (cam.streamUrl) {
+      if (cam.source) {
         const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:camera`);
         desired.set(uuid, { cam, feature: 'camera' });
       }
@@ -159,7 +159,10 @@ class KasaCamPlatform {
       .setCharacteristic(Characteristic.Model, cam.model || 'Kasa Camera')
       .setCharacteristic(Characteristic.SerialNumber, `${cam.deviceId}:camera`);
 
-    const delegate = new StreamingDelegate(hap, this.log, name, cam.streamUrl, this.config.ffmpegPath, {
+    // ffmpeg input arg strings (homebridge-camera-ffmpeg style), e.g.
+    // source: "-rtsp_transport tcp -i rtsp://host:8554/cam1"
+    // stillImageSource: "-i http://host:1984/api/frame.jpeg?src=cam1"
+    const delegate = new StreamingDelegate(hap, this.log, name, cam.source, cam.stillImageSource, this.config.ffmpegPath, {
       copyVideo: !!this.config.copyVideo,
     });
     const controller = new hap.CameraController({

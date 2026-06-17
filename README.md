@@ -39,14 +39,19 @@ That's it — `deviceId`, `model`, and the default name are auto-detected from e
 
 ## Video (optional)
 
-Kasa cameras have no RTSP/ONVIF and use a proprietary stream, so point this plugin at a feed that **ffmpeg can read** — easiest is a [go2rtc](https://github.com/AlexxIT/go2rtc) RTSP endpoint (go2rtc's `kasa://` source does the hard demuxing). Add `streamUrl` to a camera and a HomeKit **camera tile** appears:
+Kasa cameras have no RTSP/ONVIF and use a proprietary stream, so point this plugin at a feed that **ffmpeg can read** — easiest is a [go2rtc](https://github.com/AlexxIT/go2rtc) RTSP endpoint (go2rtc's `kasa://` source does the hard demuxing). Set `source` (ffmpeg input args, like `homebridge-camera-ffmpeg`) on a camera and a HomeKit **camera tile** appears:
 
 ```json
-{ "ip": "192.168.1.50", "streamUrl": "rtsp://127.0.0.1:8554/living_room" }
+{
+  "ip": "192.168.1.50",
+  "source": "-rtsp_transport tcp -i rtsp://127.0.0.1:8554/living_room",
+  "stillImageSource": "-i http://127.0.0.1:1984/api/frame.jpeg?src=living_room"
+}
 ```
 
 Requirements / notes:
 - **ffmpeg** must be installed on the Homebridge host (set `ffmpegPath` if it's not on `PATH`).
+- **`source`** / **`stillImageSource`** are ffmpeg input arg strings; `stillImageSource` defaults to `source` if omitted.
 - **Video only** for now — HomeKit audio needs AAC-ELD (`libfdk_aac`), which most ffmpeg builds lack.
 - Set `copyVideo: true` to pass H.264 through without re-encoding (much lower CPU); turn it off if the picture is glitchy.
 - The camera tile is a separate accessory from the on/off switch.
