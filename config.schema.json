@@ -1,0 +1,47 @@
+{
+  "pluginAlias": "KasaCam",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "On/off (privacy) control for TP-Link Kasa cameras. Control is routed through the TP-Link cloud (Kasa camera firmware has no local control path); on/off **state** is read locally over UDP when a camera IP is provided. The `auth`/`passthrough` signing keys and `terminalUUID` must be captured once from the Tapo app — see the README.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": { "title": "Name", "type": "string", "default": "Kasa Cam", "required": true },
+      "email": { "title": "TP-Link account email", "type": "string", "format": "email", "required": true },
+      "password": { "title": "TP-Link account password", "type": "string", "required": true, "x-schema-form": { "type": "password" } },
+      "terminalUUID": { "title": "Terminal UUID", "type": "string", "required": true, "description": "Captured from the Tapo app; the signing key pairs are bound to it." },
+      "auth": {
+        "title": "Auth signing key pair (account/login)",
+        "type": "object",
+        "properties": {
+          "accessKey": { "title": "Access Key", "type": "string", "required": true },
+          "secret": { "title": "Secret", "type": "string", "required": true }
+        }
+      },
+      "passthrough": {
+        "title": "Passthrough signing key pair (device control)",
+        "type": "object",
+        "properties": {
+          "accessKey": { "title": "Access Key", "type": "string", "required": true },
+          "secret": { "title": "Secret", "type": "string", "required": true }
+        }
+      },
+      "loginUrl": { "title": "Login host", "type": "string", "default": "https://n-wap.i.tplinkcloud.com" },
+      "appServerUrl": { "title": "App server host", "type": "string", "default": "https://n-use1-wap.i.tplinkcloud.com" },
+      "pollSeconds": { "title": "State poll interval (seconds)", "type": "integer", "default": 30, "minimum": 10 },
+      "cameras": {
+        "title": "Cameras",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": { "title": "Name", "type": "string", "required": true },
+            "deviceId": { "title": "Device ID", "type": "string", "required": true, "description": "Kasa cloud deviceId (40 hex chars)." },
+            "ip": { "title": "Local IP (optional)", "type": "string", "description": "If set, on/off state is read locally over UDP for speed." },
+            "model": { "title": "Model", "type": "string", "default": "Kasa Camera" }
+          }
+        }
+      }
+    }
+  }
+}
