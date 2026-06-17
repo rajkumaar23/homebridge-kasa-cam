@@ -22,8 +22,8 @@ Setup is just your **TP-Link account email + password** and each camera's **loca
       "password": "your-tplink-account-password",
       "pollSeconds": 30,
       "cameras": [
-        { "ip": "192.168.3.24" },
-        { "ip": "192.168.3.58", "name": "Bedroom" }
+        { "ip": "192.168.1.50" },
+        { "ip": "192.168.1.51", "name": "Bedroom" }
       ]
     }
   ]
