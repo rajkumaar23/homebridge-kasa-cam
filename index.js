@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { TapoCloud, getLocalSysinfo } = require('./lib/tplink');
+const { StreamingDelegate } = require('./lib/streaming');
 
 const PLUGIN_NAME = 'homebridge-kasa-cam';
 const PLATFORM_NAME = 'KasaCam';
@@ -71,6 +72,10 @@ class KasaCamPlatform {
         const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:${feature}`);
         desired.set(uuid, { cam, feature });
       }
+      if (cam.streamUrl) {
+        const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:camera`);
+        desired.set(uuid, { cam, feature: 'camera' });
+      }
     }
 
     // Remove stale cached accessories: disabled features, removed cameras, and the
@@ -100,6 +105,7 @@ class KasaCamPlatform {
   }
 
   setupAccessory(uuid, cam, feature) {
+    if (feature === 'camera') { this.setupCameraAccessory(uuid, cam); return; }
     const spec = FEATURES[feature];
     const name = cam.name + spec.label; // e.g. "Living Room", "Living Room LED", "Living Room Motion"
 
@@ -138,10 +144,52 @@ class KasaCamPlatform {
     this.managed.push({ accessory, cam, feature, svc });
   }
 
+  setupCameraAccessory(uuid, cam) {
+    const hap = this.api.hap;
+    const name = `${cam.name} Camera`;
+    let accessory = this.accessories.find((a) => a.UUID === uuid);
+    if (!accessory) {
+      accessory = new this.api.platformAccessory(name, uuid, hap.Categories.CAMERA);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      this.accessories.push(accessory);
+      this.log.info(`Added camera (video): ${name}`);
+    }
+    accessory.getService(Service.AccessoryInformation)
+      .setCharacteristic(Characteristic.Manufacturer, 'TP-Link Kasa')
+      .setCharacteristic(Characteristic.Model, cam.model || 'Kasa Camera')
+      .setCharacteristic(Characteristic.SerialNumber, `${cam.deviceId}:camera`);
+
+    const delegate = new StreamingDelegate(hap, this.log, name, cam.streamUrl, this.config.ffmpegPath, {
+      copyVideo: !!this.config.copyVideo,
+    });
+    const controller = new hap.CameraController({
+      cameraStreamCount: 2,
+      delegate,
+      streamingOptions: {
+        supportedCryptoSuites: [hap.SRTPCryptoSuites.AES_CM_128_HMAC_SHA1_80],
+        video: {
+          resolutions: [
+            [1920, 1080, 30], [1280, 720, 30], [1024, 768, 30],
+            [640, 360, 30], [480, 270, 30], [320, 240, 30], [320, 180, 30],
+          ],
+          codec: {
+            profiles: [hap.H264Profile.BASELINE, hap.H264Profile.MAIN, hap.H264Profile.HIGH],
+            levels: [hap.H264Level.LEVEL3_1, hap.H264Level.LEVEL3_2, hap.H264Level.LEVEL4_0],
+          },
+        },
+        audio: { codecs: [{ type: hap.AudioStreamingCodecType.AAC_ELD, samplerate: hap.AudioStreamingSamplerate.KHZ_16 }] },
+      },
+    });
+    delegate.controller = controller;
+    accessory.configureController(controller);
+    this.managed.push({ accessory, cam, feature: 'camera' });
+  }
+
   async refreshAll() {
     const sysCache = new Map(); // ip -> sys (one local read per camera per cycle)
     for (const { cam, feature, svc } of this.managed) {
       const spec = FEATURES[feature];
+      if (!spec) continue; // e.g. the 'camera' video accessory has no on/off state to poll
       try {
         let on;
         if (spec.sysField && cam.ip) {

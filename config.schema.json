@@ -10,6 +10,8 @@
       "email": { "title": "TP-Link account email", "type": "string", "format": "email", "required": true },
       "password": { "title": "TP-Link account password", "type": "string", "required": true, "x-schema-form": { "type": "password" } },
       "pollSeconds": { "title": "State poll interval (seconds)", "type": "integer", "default": 30, "minimum": 10 },
+      "ffmpegPath": { "title": "ffmpeg path", "type": "string", "default": "ffmpeg", "description": "Path to ffmpeg (required only for camera video). Many Homebridge setups already bundle one." },
+      "copyVideo": { "title": "Copy video (no transcode)", "type": "boolean", "default": false, "description": "Pass the source H.264 through without re-encoding (much lower CPU). Turn off if video is glitchy in HomeKit." },
       "exposeLed": { "title": "Expose status-LED switch", "type": "boolean", "default": true, "description": "Adds a switch to toggle each camera's status LED. The camera on/off (privacy) switch is always exposed." },
       "exposeMotionDetection": { "title": "Expose motion-detection switch", "type": "boolean", "default": true, "description": "Adds a switch to enable/disable each camera's motion detection." },
       "cameras": {
@@ -20,6 +22,7 @@
           "properties": {
             "ip": { "title": "Local IP", "type": "string", "description": "Camera's LAN IP. deviceId, model and name are auto-detected from it." },
             "name": { "title": "Name (optional)", "type": "string", "description": "Overrides the camera's app alias." },
+            "streamUrl": { "title": "Stream URL (optional, enables video)", "type": "string", "description": "An ffmpeg-readable URL for the live feed, e.g. a go2rtc RTSP stream: rtsp://<go2rtc-host>:8554/living_room. When set, a HomeKit camera tile is added. Requires ffmpeg." },
             "deviceId": { "title": "Device ID (optional)", "type": "string", "description": "Only needed if the camera isn't reachable on the local network." }
           }
         }

@@ -11,7 +11,7 @@ The LED and motion switches are on by default and can each be turned off via `ex
 
 Setup is just your **TP-Link account email + password** and each camera's **local IP**. No app capture, no rooted phone.
 
-> For the **video stream**, bridge the camera's local stream (port 19443) with something like [go2rtc](https://github.com/AlexxIT/go2rtc). This plugin only handles the on/off control that stream tools can't do.
+Optionally, it can also expose a **live video tile** (see [Video](#video-optional) below).
 
 ## Configuration
 
@@ -36,6 +36,20 @@ Setup is just your **TP-Link account email + password** and each camera's **loca
 ```
 
 That's it — `deviceId`, `model`, and the default name are auto-detected from each camera's local `get_sysinfo`. (If a camera isn't reachable on the same LAN as Homebridge, give its `deviceId` explicitly and omit `ip`; state will then be read via the cloud.)
+
+## Video (optional)
+
+Kasa cameras have no RTSP/ONVIF and use a proprietary stream, so point this plugin at a feed that **ffmpeg can read** — easiest is a [go2rtc](https://github.com/AlexxIT/go2rtc) RTSP endpoint (go2rtc's `kasa://` source does the hard demuxing). Add `streamUrl` to a camera and a HomeKit **camera tile** appears:
+
+```json
+{ "ip": "192.168.1.50", "streamUrl": "rtsp://127.0.0.1:8554/living_room" }
+```
+
+Requirements / notes:
+- **ffmpeg** must be installed on the Homebridge host (set `ffmpegPath` if it's not on `PATH`).
+- **Video only** for now — HomeKit audio needs AAC-ELD (`libfdk_aac`), which most ffmpeg builds lack.
+- Set `copyVideo: true` to pass H.264 through without re-encoding (much lower CPU); turn it off if the picture is glitchy.
+- The camera tile is a separate accessory from the on/off switch.
 
 ## How it works
 
