@@ -98,9 +98,10 @@ class KasaCamPlatform {
 
     const wanted = this.featuresFor();
 
-    // remove services for features that are now disabled
+    // remove any Switch service that isn't a currently-wanted feature
+    // (covers disabled features and the legacy subtype-less switch from <=0.1.x)
     accessory.services
-      .filter((s) => s.subtype && FEATURES[s.subtype] && !wanted.includes(s.subtype))
+      .filter((s) => s.UUID === Service.Switch.UUID && !wanted.includes(s.subtype))
       .forEach((s) => accessory.removeService(s));
 
     for (const feature of wanted) {
