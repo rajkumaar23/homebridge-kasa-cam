@@ -1,5 +1,8 @@
 'use strict';
-const { TapoCloud, getCameraEnabledLocal } = require('./lib/tplink');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { TapoCloud, getCameraEnabledLocal, getLocalSysinfo } = require('./lib/tplink');
 
 const PLUGIN_NAME = 'homebridge-kasa-cam';
 const PLATFORM_NAME = 'KasaCam';
@@ -18,26 +21,56 @@ class KasaCamPlatform {
     this.config = config || {};
     this.api = api;
     this.accessories = [];
-    this.cloud = new TapoCloud(this.config, log);
-    // local state cache so HomeKit "get" is instant; refreshed on a timer
-    this.stateCache = new Map(); // deviceId -> bool
+    this.stateCache = new Map();
 
-    if (!this.config.email || !this.config.auth || !this.config.passthrough) {
-      this.log.error('Missing config: email, auth{accessKey,secret}, passthrough{accessKey,secret} are required.');
+    if (!this.config.email || !this.config.password) {
+      this.log.error('Config requires "email" and "password" (your TP-Link account). Nothing else is needed.');
       return;
     }
+
+    // Generate + persist our own terminalUUID (no per-user capture; a fresh UUID logs in fine).
+    const uuidFile = path.join(api.user.storagePath(), 'kasa-cam-terminal-uuid');
+    let terminalUUID;
+    try { terminalUUID = fs.readFileSync(uuidFile, 'utf8').trim(); } catch (e) { /* none yet */ }
+    if (!terminalUUID) {
+      terminalUUID = crypto.randomBytes(16).toString('hex').toUpperCase();
+      try { fs.writeFileSync(uuidFile, terminalUUID); } catch (e) { this.log.warn('could not persist terminalUUID:', e.message); }
+    }
+
+    // Signing keys default to the baked-in app constants — users configure nothing here.
+    this.cloud = new TapoCloud({ email: this.config.email, password: this.config.password, terminalUUID }, log);
+
     api.on('didFinishLaunching', () => this.setup());
   }
 
   configureAccessory(accessory) { this.accessories.push(accessory); }
 
-  setup() {
+  async setup() {
     const cams = this.config.cameras || [];
-    for (const cam of cams) this.addCamera(cam);
-    // periodic local refresh of on/off state
+    if (!cams.length) this.log.warn('No cameras configured. Add cameras with at least an "ip" (deviceId is auto-detected).');
+    for (const cam of cams) {
+      try {
+        await this.resolveCamera(cam);
+        this.addCamera(cam);
+      } catch (e) {
+        this.log.error(`Skipping camera ${cam.name || cam.ip || cam.deviceId}: ${e.message}`);
+      }
+    }
     this.pollMs = (this.config.pollSeconds || 30) * 1000;
     setInterval(() => this.refreshAll(), this.pollMs);
     this.refreshAll();
+  }
+
+  // Fill in deviceId / model / name from the camera's local get_sysinfo when possible.
+  async resolveCamera(cam) {
+    if (cam.ip && (!cam.deviceId || !cam.model)) {
+      const sys = await getLocalSysinfo(cam.ip);
+      cam.deviceId = cam.deviceId || sys.deviceId;
+      cam.model = cam.model || sys.model;
+      cam.name = cam.name || sys.alias;
+    }
+    if (!cam.deviceId) throw new Error('no deviceId and could not read it locally (provide "ip" or "deviceId")');
+    cam.name = cam.name || `Kasa Cam ${cam.deviceId.slice(0, 6)}`;
   }
 
   addCamera(cam) {
@@ -75,7 +108,6 @@ class KasaCamPlatform {
       const cam = accessory._cam;
       if (!cam) continue;
       try {
-        // prefer fast local read; fall back to cloud if the camera IP isn't reachable
         let on;
         if (cam.ip) {
           try { on = await getCameraEnabledLocal(cam.ip); }
