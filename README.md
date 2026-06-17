@@ -52,6 +52,7 @@ Kasa cameras have no RTSP/ONVIF and use a proprietary stream, so point this plug
 Requirements / notes:
 - **ffmpeg** must be installed on the Homebridge host (set `ffmpegPath` if it's not on `PATH`).
 - **`source`** / **`stillImageSource`** are ffmpeg input arg strings; `stillImageSource` defaults to `source` if omitted.
+- With video, on/off (privacy) becomes the **camera tile's native "Camera Off"** control (no separate switch). Set `privacyAsSwitch: true` if that control doesn't appear on your iOS version and you'd rather have a standalone switch.
 - **Video only** for now — HomeKit audio needs AAC-ELD (`libfdk_aac`), which most ffmpeg builds lack.
 - Set `copyVideo: true` to pass H.264 through without re-encoding (much lower CPU); turn it off if the picture is glitchy.
 - The camera tile is a separate accessory from the on/off switch.

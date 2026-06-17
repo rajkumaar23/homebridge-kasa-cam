@@ -68,7 +68,9 @@ class KasaCamPlatform {
     for (const cam of cams) {
       try { await this.resolveCamera(cam); }
       catch (e) { this.log.error(`Skipping camera ${cam.name || cam.ip || cam.deviceId}: ${e.message}`); continue; }
+      const nativePrivacy = cam.source && !this.config.privacyAsSwitch;
       for (const feature of this.featuresFor()) {
+        if (feature === 'power' && nativePrivacy) continue; // privacy handled by the camera tile
         const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:${feature}`);
         desired.set(uuid, { cam, feature });
       }
@@ -185,21 +187,52 @@ class KasaCamPlatform {
     });
     delegate.controller = controller;
     accessory.configureController(controller);
-    this.managed.push({ accessory, cam, feature: 'camera' });
+
+    // Native privacy: map the device on/off to the camera tile's HomeKitCameraActive
+    // (and reflect it in ManuallyDisabled). Skipped if privacyAsSwitch is set.
+    let om = null;
+    if (!this.config.privacyAsSwitch) {
+      om = accessory.getService(Service.CameraOperatingMode) || accessory.addService(Service.CameraOperatingMode);
+      om.getCharacteristic(Characteristic.HomeKitCameraActive)
+        .onGet(() => ((this.stateCache.get(`${cam.deviceId}:power`) ?? true) ? 1 : 0))
+        .onSet(async (value) => {
+          const on = value === 1;
+          try {
+            await this.cloud.setCameraEnabled(cam.deviceId, on);
+            this.stateCache.set(`${cam.deviceId}:power`, on);
+            if (Characteristic.ManuallyDisabled) om.updateCharacteristic(Characteristic.ManuallyDisabled, on ? 0 : 1);
+            this.log.info(`${cam.name}: camera ${on ? 'ON' : 'OFF (privacy)'}`);
+          } catch (e) {
+            this.log.error(`${cam.name}: privacy set failed: ${e.message}`);
+            throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+          }
+        });
+    }
+    this.managed.push({ accessory, cam, feature: 'camera', om });
   }
 
   async refreshAll() {
     const sysCache = new Map(); // ip -> sys (one local read per camera per cycle)
-    for (const { cam, feature, svc } of this.managed) {
-      const spec = FEATURES[feature];
-      if (!spec) continue; // e.g. the 'camera' video accessory has no on/off state to poll
+    const getSys = async (ip) => {
+      if (!sysCache.has(ip)) { try { sysCache.set(ip, await getLocalSysinfo(ip)); } catch (e) { sysCache.set(ip, null); } }
+      return sysCache.get(ip);
+    };
+    for (const { cam, feature, svc, om } of this.managed) {
       try {
+        if (feature === 'camera') {
+          if (!om) continue; // privacyAsSwitch mode: handled by the power switch instead
+          const sys = cam.ip ? await getSys(cam.ip) : null;
+          const on = sys ? sys.camera_switch === 'on' : await this.cloud.getCameraEnabledCloud(cam.deviceId);
+          this.stateCache.set(`${cam.deviceId}:power`, on);
+          om.updateCharacteristic(Characteristic.HomeKitCameraActive, on ? 1 : 0);
+          if (Characteristic.ManuallyDisabled) om.updateCharacteristic(Characteristic.ManuallyDisabled, on ? 0 : 1);
+          continue;
+        }
+        const spec = FEATURES[feature];
+        if (!spec) continue;
         let on;
         if (spec.sysField && cam.ip) {
-          if (!sysCache.has(cam.ip)) {
-            try { sysCache.set(cam.ip, await getLocalSysinfo(cam.ip)); } catch (e) { sysCache.set(cam.ip, null); }
-          }
-          const sys = sysCache.get(cam.ip);
+          const sys = await getSys(cam.ip);
           on = sys ? sys[spec.sysField] === 'on' : await this.cloud.getFeatureCloud(cam.deviceId, spec.ns, spec.get);
         } else {
           on = await this.cloud.getFeatureCloud(cam.deviceId, spec.ns, spec.get);
@@ -207,7 +240,7 @@ class KasaCamPlatform {
         this.stateCache.set(`${cam.deviceId}:${feature}`, on);
         svc.updateCharacteristic(Characteristic.On, on);
       } catch (e) {
-        this.log.debug(`${cam.name}${spec.label}: refresh failed: ${e.message}`);
+        this.log.debug(`${cam.name} ${feature}: refresh failed: ${e.message}`);
       }
     }
   }
