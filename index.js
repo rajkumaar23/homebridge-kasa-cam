@@ -28,14 +28,14 @@ class KasaCamPlatform {
     this.log = log;
     this.config = config || {};
     this.api = api;
-    this.accessories = [];
-    this.stateCache = new Map(); // `${deviceId}:${feature}` -> bool
+    this.accessories = [];           // cached accessories from disk
+    this.managed = [];               // [{ accessory, cam, feature }]
+    this.stateCache = new Map();     // `${deviceId}:${feature}` -> bool
 
     if (!this.config.email || !this.config.password) {
       this.log.error('Config requires "email" and "password" (your TP-Link account).');
       return;
     }
-    // Optional features default ON (the on/off switch is always present regardless).
     this.enabled = {
       power: true,
       led: this.config.exposeLed !== false,
@@ -56,13 +56,33 @@ class KasaCamPlatform {
 
   configureAccessory(accessory) { this.accessories.push(accessory); }
 
+  featuresFor() { return Object.keys(FEATURES).filter((k) => this.enabled[k]); }
+
   async setup() {
     const cams = this.config.cameras || [];
     if (!cams.length) this.log.warn('No cameras configured. Add cameras with at least an "ip".');
+
+    // Build the set of accessories we want: one per (camera, enabled feature).
+    const desired = new Map(); // uuid -> { cam, feature }
     for (const cam of cams) {
-      try { await this.resolveCamera(cam); this.addCamera(cam); }
-      catch (e) { this.log.error(`Skipping camera ${cam.name || cam.ip || cam.deviceId}: ${e.message}`); }
+      try { await this.resolveCamera(cam); }
+      catch (e) { this.log.error(`Skipping camera ${cam.name || cam.ip || cam.deviceId}: ${e.message}`); continue; }
+      for (const feature of this.featuresFor()) {
+        const uuid = this.api.hap.uuid.generate(`${PLATFORM_NAME}:${cam.deviceId}:${feature}`);
+        desired.set(uuid, { cam, feature });
+      }
     }
+
+    // Remove stale cached accessories: disabled features, removed cameras, and the
+    // old single-accessory layout from <=0.2.0 (whose UUID won't be in `desired`).
+    const stale = this.accessories.filter((a) => !desired.has(a.UUID));
+    if (stale.length) {
+      this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, stale);
+      this.accessories = this.accessories.filter((a) => desired.has(a.UUID));
+    }
+
+    for (const [uuid, { cam, feature }] of desired) this.setupAccessory(uuid, cam, feature);
+
     this.pollMs = (this.config.pollSeconds || 30) * 1000;
     setInterval(() => this.refreshAll(), this.pollMs);
     this.refreshAll();
@@ -79,75 +99,64 @@ class KasaCamPlatform {
     cam.name = cam.name || `Kasa Cam ${cam.deviceId.slice(0, 6)}`;
   }
 
-  featuresFor() {
-    return Object.keys(FEATURES).filter((k) => this.enabled[k]);
-  }
+  setupAccessory(uuid, cam, feature) {
+    const spec = FEATURES[feature];
+    const name = cam.name + spec.label; // e.g. "Living Room", "Living Room LED", "Living Room Motion"
 
-  addCamera(cam) {
-    const uuid = this.api.hap.uuid.generate(PLATFORM_NAME + ':' + cam.deviceId);
     let accessory = this.accessories.find((a) => a.UUID === uuid);
     if (!accessory) {
-      accessory = new this.api.platformAccessory(cam.name, uuid);
+      accessory = new this.api.platformAccessory(name, uuid);
       this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      this.log.info(`Added camera: ${cam.name}`);
+      this.accessories.push(accessory);
+      this.log.info(`Added: ${name}`);
+    } else {
+      accessory.displayName = name;
     }
+
     accessory.getService(Service.AccessoryInformation)
       .setCharacteristic(Characteristic.Manufacturer, 'TP-Link Kasa')
       .setCharacteristic(Characteristic.Model, cam.model || 'Kasa Camera')
-      .setCharacteristic(Characteristic.SerialNumber, cam.deviceId);
+      .setCharacteristic(Characteristic.Name, name)
+      .setCharacteristic(Characteristic.SerialNumber, `${cam.deviceId}:${feature}`);
 
-    const wanted = this.featuresFor();
+    const svc = accessory.getService(Service.Switch) || accessory.addService(Service.Switch, name);
+    svc.setCharacteristic(Characteristic.Name, name);
+    if (Characteristic.ConfiguredName) svc.setCharacteristic(Characteristic.ConfiguredName, name);
+    svc.getCharacteristic(Characteristic.On)
+      .onGet(() => this.stateCache.get(`${cam.deviceId}:${feature}`) ?? true)
+      .onSet(async (value) => {
+        try {
+          await this.cloud.setFeature(cam.deviceId, spec.ns, spec.set, !!value);
+          this.stateCache.set(`${cam.deviceId}:${feature}`, !!value);
+          this.log.info(`${name}: ${value ? 'ON' : 'OFF'}`);
+        } catch (e) {
+          this.log.error(`${name}: set failed: ${e.message}`);
+          throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+        }
+      });
 
-    // remove any Switch service that isn't a currently-wanted feature
-    // (covers disabled features and the legacy subtype-less switch from <=0.1.x)
-    accessory.services
-      .filter((s) => s.UUID === Service.Switch.UUID && !wanted.includes(s.subtype))
-      .forEach((s) => accessory.removeService(s));
-
-    for (const feature of wanted) {
-      const spec = FEATURES[feature];
-      const svcName = cam.name + spec.label;
-      let svc = accessory.getServiceById(Service.Switch, feature);
-      if (!svc) svc = accessory.addService(Service.Switch, svcName, feature);
-      svc.setCharacteristic(Characteristic.Name, svcName);
-      svc.getCharacteristic(Characteristic.On)
-        .onGet(() => this.stateCache.get(`${cam.deviceId}:${feature}`) ?? true)
-        .onSet(async (value) => {
-          try {
-            await this.cloud.setFeature(cam.deviceId, spec.ns, spec.set, !!value);
-            this.stateCache.set(`${cam.deviceId}:${feature}`, !!value);
-            this.log.info(`${svcName}: ${value ? 'ON' : 'OFF'}`);
-          } catch (e) {
-            this.log.error(`${svcName}: set failed: ${e.message}`);
-            throw new this.api.hap.HapStatusError(this.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-          }
-        });
-    }
-    accessory._cam = cam;
+    this.managed.push({ accessory, cam, feature, svc });
   }
 
   async refreshAll() {
-    for (const accessory of this.accessories) {
-      const cam = accessory._cam;
-      if (!cam) continue;
-      const wanted = this.featuresFor();
-      // one local read covers power + led (both in get_sysinfo); motion needs cloud
-      let sys = null;
-      if (cam.ip && wanted.some((f) => FEATURES[f].sysField)) {
-        try { sys = await getLocalSysinfo(cam.ip); } catch (e) { /* fall back to cloud per-feature */ }
-      }
-      for (const feature of wanted) {
-        const spec = FEATURES[feature];
-        try {
-          let on;
-          if (spec.sysField && sys) on = sys[spec.sysField] === 'on';
-          else on = await this.cloud.getFeatureCloud(cam.deviceId, spec.ns, spec.get);
-          this.stateCache.set(`${cam.deviceId}:${feature}`, on);
-          const svc = accessory.getServiceById(Service.Switch, feature);
-          if (svc) svc.updateCharacteristic(Characteristic.On, on);
-        } catch (e) {
-          this.log.debug(`${cam.name}${spec.label}: refresh failed: ${e.message}`);
+    const sysCache = new Map(); // ip -> sys (one local read per camera per cycle)
+    for (const { cam, feature, svc } of this.managed) {
+      const spec = FEATURES[feature];
+      try {
+        let on;
+        if (spec.sysField && cam.ip) {
+          if (!sysCache.has(cam.ip)) {
+            try { sysCache.set(cam.ip, await getLocalSysinfo(cam.ip)); } catch (e) { sysCache.set(cam.ip, null); }
+          }
+          const sys = sysCache.get(cam.ip);
+          on = sys ? sys[spec.sysField] === 'on' : await this.cloud.getFeatureCloud(cam.deviceId, spec.ns, spec.get);
+        } else {
+          on = await this.cloud.getFeatureCloud(cam.deviceId, spec.ns, spec.get);
         }
+        this.stateCache.set(`${cam.deviceId}:${feature}`, on);
+        svc.updateCharacteristic(Characteristic.On, on);
+      } catch (e) {
+        this.log.debug(`${cam.name}${spec.label}: refresh failed: ${e.message}`);
       }
     }
   }
