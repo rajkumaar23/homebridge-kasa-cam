@@ -2,9 +2,12 @@
 
 HomeKit **on/off (privacy) control** for TP-Link **Kasa cameras** (EC70 "Spot Pan Tilt", and other models using the same protocol).
 
-Each camera shows up as a **Switch** in HomeKit:
-- **On** = camera enabled
-- **Off** = privacy mode (camera disabled — same as "Camera Off" in the app)
+Each camera shows up in HomeKit with up to three switches:
+- **Camera on/off** (always present) — **On** = enabled, **Off** = privacy mode (same as "Camera Off" in the app)
+- **Status LED** (optional) — toggle the camera's indicator LED
+- **Motion detection** (optional) — enable/disable motion detection
+
+The LED and motion switches are on by default and can each be turned off via `exposeLed` / `exposeMotionDetection`.
 
 Setup is just your **TP-Link account email + password** and each camera's **local IP**. No app capture, no rooted phone.
 
@@ -21,6 +24,8 @@ Setup is just your **TP-Link account email + password** and each camera's **loca
       "email": "you@example.com",
       "password": "your-tplink-account-password",
       "pollSeconds": 30,
+      "exposeLed": true,
+      "exposeMotionDetection": true,
       "cameras": [
         { "ip": "192.168.1.50" },
         { "ip": "192.168.1.51", "name": "Bedroom" }

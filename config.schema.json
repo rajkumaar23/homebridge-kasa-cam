@@ -10,6 +10,8 @@
       "email": { "title": "TP-Link account email", "type": "string", "format": "email", "required": true },
       "password": { "title": "TP-Link account password", "type": "string", "required": true, "x-schema-form": { "type": "password" } },
       "pollSeconds": { "title": "State poll interval (seconds)", "type": "integer", "default": 30, "minimum": 10 },
+      "exposeLed": { "title": "Expose status-LED switch", "type": "boolean", "default": true, "description": "Adds a switch to toggle each camera's status LED. The camera on/off (privacy) switch is always exposed." },
+      "exposeMotionDetection": { "title": "Expose motion-detection switch", "type": "boolean", "default": true, "description": "Adds a switch to enable/disable each camera's motion detection." },
       "cameras": {
         "title": "Cameras",
         "type": "array",
