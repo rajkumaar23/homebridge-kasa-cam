@@ -4,8 +4,6 @@ on:
   release:
     types: [created]
 
-name: Publish Package
-
 permissions:
   id-token: write  # Required for OIDC
   contents: read
